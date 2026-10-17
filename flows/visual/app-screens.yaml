@@ -1,0 +1,90 @@
+# FlockMitra visual QA — one pass over the core screens with screenshots.
+#
+# Prerequisites:
+#   1. iOS Simulator booted (e.g. iPhone 16 Pro)
+#   2. Metro running: npx expo start  (app served on exp://127.0.0.1:8081)
+#
+# Run from the repo root:
+#   maestro test flows/visual/app-screens.yaml
+#
+# Screenshots are written to the run's artifacts directory printed at the
+# end of the run (under ~/maestro-tests/). Selectors below are grounded in
+# the live accessibility hierarchy (verified via `maestro hierarchy`), not
+# guessed: AppText/TextField/Button all expose their labels.
+#
+# Note: clearState wipes Expo Go's local SQLite, so this flow always sees
+# the empty state first and ends with exactly one created batch —
+# deterministic screenshots, safe to run repeatedly.
+appId: host.exp.Exponent
+---
+- launchApp:
+    clearState: true
+- openLink: exp://127.0.0.1:8081
+# clearState makes Expo Go show its one-time developer-menu intro sheet,
+# then possibly a native dev menu with a "Close" button. Dismiss both or
+# every assertion below is occluded. The sheets dismiss slowly under
+# automation, so allow generous settle time.
+- extendedWaitUntil:
+    visible: "Continue"
+    timeout: 60000
+- tapOn: "Continue"
+- waitForAnimationToEnd:
+    timeout: 10000
+- runFlow:
+    when:
+      visible: "Close"
+    commands:
+      - tapOn: "Close"
+      - waitForAnimationToEnd:
+          timeout: 5000
+- extendedWaitUntil:
+    visible: "Total initial birds"
+    timeout: 90000
+
+# 1. Home dashboard (empty state)
+- assertVisible: "Nothing needs attention right now."
+- assertVisible: "Record daily report"
+- takeScreenshot: 01-home
+
+# 2. Create-batch form (from Home's secondary action)
+- tapOn: "New batch"
+- extendedWaitUntil:
+    visible: "Poultry type"
+    timeout: 10000
+- assertVisible: "Batch name"
+- assertVisible: "Save batch"
+- takeScreenshot: 02-create-batch
+
+# 3. Validation: empty submit shows all issues, saves nothing
+# (InlineNotice live regions group both messages into one a11y node,
+# so match with a trailing regex wildcard instead of full-string equality.)
+- tapOn: "Save batch"
+- assertVisible: "Enter a batch name.*"
+- assertVisible: "Enter the initial bird count.*"
+- takeScreenshot: 03-create-validation
+
+# 4. Fill and save → Batches list with success flash
+# Use id: selectors — label text is ambiguous between AppText and TextInput.
+# Blur the focused field by tapping a label before Save: hideKeyboard can
+# flake on iOS, and a Save tap that lands on the keyboard both mistypes and
+# skips the submit.
+- tapOn:
+    id: "field-batch-name"
+- inputText: "Visual QA Batch"
+- tapOn:
+    id: "field-initial-birds"
+- inputText: "500"
+- tapOn: "Poultry type"
+- waitForAnimationToEnd:
+    timeout: 5000
+- tapOn: "Save batch"
+- assertVisible: "Batch saved on this device.*"
+- assertVisible: "Visual QA Batch"
+- assertVisible: "Initial birds"
+- takeScreenshot: 04-batches-with-data
+
+# 5. Batch details for the created batch
+- tapOn: "Details"
+- assertVisible: "500.*"
+- assertVisible: "Start date"
+- takeScreenshot: 05-batch-details

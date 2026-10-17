@@ -1,0 +1,133 @@
+# FlockMitra visual QA — daily report workflow end to end.
+#
+# Prerequisites:
+#   1. iOS Simulator booted (e.g. iPhone 16 Pro)
+#   2. Metro running: npx expo start  (app served on exp://127.0.0.1:8081)
+#
+# Run from the repo root:
+#   maestro test flows/visual/daily-reports.yaml
+#
+# Deterministic: clearState wipes SQLite, creates one batch, then walks
+# create → validation → save → list → details → edit → re-save.
+appId: host.exp.Exponent
+---
+- launchApp:
+    clearState: true
+- openLink: exp://127.0.0.1:8081
+- extendedWaitUntil:
+    visible: "Continue"
+    timeout: 60000
+- tapOn: "Continue"
+- waitForAnimationToEnd:
+    timeout: 10000
+# Expo Go can leave its dev menu open over the app; close it if present.
+- runFlow:
+    when:
+      visible: "Close"
+    commands:
+      - tapOn: "Close"
+      - waitForAnimationToEnd:
+          timeout: 5000
+- extendedWaitUntil:
+    visible: "Total initial birds"
+    timeout: 90000
+
+# Seed one batch (needed before any report can exist).
+# Fields are selected by testID (resource-id in the a11y tree) — the visible
+# label text is ambiguous between the label and the input. Wait for the form
+# to mount before touching fields.
+- tapOn: "New batch"
+- extendedWaitUntil:
+    visible: "Poultry type"
+    timeout: 10000
+- tapOn:
+    id: "field-batch-name"
+- inputText: "Report Flow Batch"
+- tapOn:
+    id: "field-initial-birds"
+- inputText: "500"
+# Blur the focused field by tapping a label: hideKeyboard can flake on iOS,
+# and a Save tap that lands on the keyboard both mistypes and skips the submit.
+- tapOn: "Poultry type"
+- waitForAnimationToEnd:
+    timeout: 5000
+- tapOn: "Save batch"
+- assertVisible: "Batch saved on this device.*"
+
+# Reach the report timeline from the active batch row.
+- tapOn: "Record report"
+- assertVisible: "Daily reports"
+- assertVisible: "No daily reports yet."
+- takeScreenshot: 10-reports-empty
+
+# Open the new-report form.
+- tapOn: "New report"
+- extendedWaitUntil:
+    visible: "Today movements"
+    timeout: 10000
+- assertVisible: "New daily report"
+- assertVisible: "Opening birds"
+- scrollUntilVisible:
+    element: "Closing birds"
+    direction: DOWN
+    timeout: 10000
+- assertVisible: "Closing birds"
+- takeScreenshot: 11-report-form
+- scrollUntilVisible:
+    element: "Today movements"
+    direction: UP
+    timeout: 10000
+
+# Validation: a non-integer movement rejects the save with field + notice.
+# (A decimal is used because the field's numeric keypad cannot type letters;
+# the domain rejects both non-numbers and non-integers. Blur the field by
+# tapping a label before scrolling — the keyboard overlays the save button.)
+- tapOn:
+    id: "field-movement-deaths"
+- inputText: "2.5"
+- tapOn: "Today movements"
+- scrollUntilVisible:
+    element: "Save report"
+    direction: DOWN
+    timeout: 10000
+- tapOn: "Save report"
+# Issues render at the top of the scroll view; return there to see them.
+- scrollUntilVisible:
+    element: "Report date"
+    direction: UP
+    timeout: 10000
+- assertVisible: "Bird counts must be whole numbers.*"
+- takeScreenshot: 12-report-validation
+
+# Fix and fill real movements; save → timeline with the saved row.
+- scrollUntilVisible:
+    element: "Deaths"
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: "field-movement-deaths"
+- eraseText: 10
+- inputText: "2"
+- tapOn:
+    id: "field-movement-additions"
+- inputText: "10"
+- tapOn: "Today movements"
+- scrollUntilVisible:
+    element: "Save report"
+    direction: DOWN
+    timeout: 10000
+- tapOn: "Save report"
+- assertVisible: "Report saved on this device.*"
+- takeScreenshot: 13-reports-list
+
+# Open the saved day's details.
+- tapOn: "Details"
+- assertVisible: "Report details"
+- assertVisible: "Closing birds"
+- takeScreenshot: 14-report-details
+
+# Edit the report (closing recalculation path).
+- tapOn: "Edit report"
+- assertVisible: "Edit daily report"
+- assertVisible: "The report date cannot change after saving."
+- takeScreenshot: 15-report-edit

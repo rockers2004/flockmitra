@@ -1,10 +1,13 @@
 /**
  * Batches — grouped by lifecycle stage: active → closing review → completed.
  *
- * Job: scan batch identity, bird count, age, status and reach the next
- * workflow action. Compact cards per batch, one action each, actions give
- * honest planned-workflow feedback (no fake forms or persistence).
- * Completed batches are presented as read-only, per AGENTS.md.
+ * Job: scan batch identity, initial birds, age, status and reach the next
+ * workflow action. Loads from local SQLite via the repository hook (works
+ * offline); each state — loading, empty, error, data — is a deliberate
+ * screen. "Record report" on active batches opens the real daily report
+ * timeline; closing-review and completed actions still give honest
+ * planned-workflow feedback until those workflows exist. Completed
+ * batches stay read-only, per AGENTS.md.
  */
 import { useState } from 'react';
 import { StyleSheet, View } from 'react-native';
@@ -18,12 +21,9 @@ import {
   SectionHeader,
   StatusBadge,
 } from '../components';
-import {
-  SAMPLE_BATCHES,
-  type BatchStatus,
-  type PoultryType,
-  type SampleBatch,
-} from '../data/sampleData';
+import type { Batch, BatchStatus, PoultryType } from '../domain/batch';
+import { daysSince, todayIso } from '../domain/dates';
+import { useBatches } from '../hooks/useBatches';
 import { useI18n } from '../i18n/I18nProvider';
 import type { TranslateFn } from '../i18n/I18nProvider';
 import type { TranslationKey } from '../i18n/strings';
@@ -70,41 +70,89 @@ const ACTION_KEYS: Readonly<Record<BatchStatus, TranslationKey>> = {
   completed: 'batches.action.summary',
 };
 
-export function BatchesScreen() {
+interface BatchesScreenProps {
+  /** One-shot "saved" notice from a just-completed create. */
+  readonly flash: 'batchCreated' | null;
+  readonly onCreateBatch: () => void;
+  readonly onOpenBatchDetails: (batchId: string) => void;
+  /** Opens a batch's daily report timeline (real workflow). */
+  readonly onOpenBatchReports: (batchId: string) => void;
+}
+
+export function BatchesScreen({
+  flash,
+  onCreateBatch,
+  onOpenBatchDetails,
+  onOpenBatchReports,
+}: BatchesScreenProps) {
   const { t } = useI18n();
+  const { batches, loading, error, reload } = useBatches();
   const [showPlannedNotice, setShowPlannedNotice] = useState(false);
 
   return (
     <Screen title={t('batches.title')} subtitle={t('batches.subtitle')}>
-      <InlineNotice tone="info">{t('common.sampleNotice')}</InlineNotice>
+      {flash === 'batchCreated' ? (
+        <InlineNotice tone="info" liveRegion>
+          {t('batches.createdNotice')}
+        </InlineNotice>
+      ) : null}
 
-      <Button
-        label={t('batches.newBatch')}
-        onPress={() => setShowPlannedNotice(true)}
-        style={styles.newBatch}
-      />
+      {loading ? (
+        <AppText variant="body" tone="muted">
+          {t('common.loading')}
+        </AppText>
+      ) : null}
 
-      {SECTIONS.map((section) => {
-        const batches = SAMPLE_BATCHES.filter((batch) => batch.status === section.status);
-        if (batches.length === 0) {
-          return null;
-        }
-        return (
-          <View key={section.status} style={styles.section}>
-            <SectionHeader title={t(section.titleKey)} />
-            <View style={styles.sectionItems}>
-              {batches.map((batch) => (
-                <BatchRow
-                  key={batch.id}
-                  batch={batch}
-                  t={t}
-                  onAction={() => setShowPlannedNotice(true)}
-                />
-              ))}
-            </View>
-          </View>
-        );
-      })}
+      {error ? (
+        <View style={styles.stateBlock}>
+          <InlineNotice tone="danger">{t('batches.loadError')}</InlineNotice>
+          <Button label={t('common.retry')} variant="secondary" onPress={reload} />
+        </View>
+      ) : null}
+
+      {!loading && !error && batches.length === 0 ? (
+        <View style={styles.stateBlock}>
+          <AppText variant="bodyStrong">{t('batches.emptyTitle')}</AppText>
+          <AppText variant="body" tone="muted">
+            {t('batches.emptyBody')}
+          </AppText>
+          <Button label={t('batches.newBatch')} onPress={onCreateBatch} />
+        </View>
+      ) : null}
+
+      {!loading && !error && batches.length > 0 ? (
+        <>
+          <Button
+            label={t('batches.newBatch')}
+            onPress={onCreateBatch}
+            style={styles.newBatch}
+          />
+
+          {SECTIONS.map((section) => {
+            const sectionBatches = batches.filter((batch) => batch.status === section.status);
+            if (sectionBatches.length === 0) {
+              return null;
+            }
+            return (
+              <View key={section.status} style={styles.section}>
+                <SectionHeader title={t(section.titleKey)} />
+                <View style={styles.sectionItems}>
+                  {sectionBatches.map((batch) => (
+                    <BatchRow
+                      key={batch.id}
+                      batch={batch}
+                      t={t}
+                      onOpenDetails={() => onOpenBatchDetails(batch.id)}
+                      onRecordReport={() => onOpenBatchReports(batch.id)}
+                      onPlannedAction={() => setShowPlannedNotice(true)}
+                    />
+                  ))}
+                </View>
+              </View>
+            );
+          })}
+        </>
+      ) : null}
 
       {showPlannedNotice ? (
         <InlineNotice tone="info" liveRegion>
@@ -118,27 +166,34 @@ export function BatchesScreen() {
 function BatchRow({
   batch,
   t,
-  onAction,
+  onOpenDetails,
+  onRecordReport,
+  onPlannedAction,
 }: {
-  batch: SampleBatch;
+  batch: Batch;
   t: TranslateFn;
-  onAction: () => void;
+  onOpenDetails: () => void;
+  onRecordReport: () => void;
+  onPlannedAction: () => void;
 }) {
+  // Active batches open the real report timeline; closing-review and
+  // completed workflows are still planned.
+  const onStatusAction = batch.status === 'active' ? onRecordReport : onPlannedAction;
   return (
     <Card>
       <View style={styles.rowTop}>
         <View style={styles.identity}>
           <AppText variant="bodyStrong">{batch.name}</AppText>
           <AppText variant="caption" tone="muted">
-            {`${t(TYPE_KEYS[batch.poultryType])} · ${t('batches.age', { days: batch.ageDays })}`}
+            {`${t(TYPE_KEYS[batch.poultryType])} · ${t('batches.age', { days: daysSince(batch.startDate, todayIso()) })}`}
           </AppText>
         </View>
         <View style={styles.countBlock}>
           <AppText variant="metric" numeric>
-            {formatCount(batch.birdCount)}
+            {formatCount(batch.initialBirdCount)}
           </AppText>
           <AppText variant="caption" tone="muted">
-            {t('batches.birdsNoun')}
+            {t('batches.initialBirds')}
           </AppText>
         </View>
       </View>
@@ -154,13 +209,19 @@ function BatchRow({
             </AppText>
           ) : null}
         </View>
-        <Button variant="ghost" label={t(ACTION_KEYS[batch.status])} onPress={onAction} />
+        <View style={styles.rowActions}>
+          <Button variant="ghost" label={t('batches.action.details')} onPress={onOpenDetails} />
+          <Button variant="ghost" label={t(ACTION_KEYS[batch.status])} onPress={onStatusAction} />
+        </View>
       </View>
     </Card>
   );
 }
 
 const styles = StyleSheet.create({
+  stateBlock: {
+    gap: spacing.md,
+  },
   newBatch: {
     alignSelf: 'stretch',
   },
@@ -202,5 +263,11 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     rowGap: spacing.xs,
+  },
+  rowActions: {
+    alignItems: 'center',
+    columnGap: spacing.xs,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
   },
 });

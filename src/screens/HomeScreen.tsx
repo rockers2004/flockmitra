@@ -1,15 +1,17 @@
 /**
  * Home — the farm overview.
  *
- * Job: within one glance, show the current flock size, what needs attention
- * today, and the two workflows the user reaches for most (daily report,
- * new batch). Hierarchy: sample banner → hero count → alerts → actions.
+ * Job: within one glance show the flock's starting size from locally saved
+ * batches, what needs attention today, and the two workflows the user
+ * reaches for most (daily report, new batch). Hierarchy: hero count →
+ * attention → actions.
  *
- * The hero count is produced by the real `calculateClosingStock` domain
- * function from labelled sample movements — no fabricated metrics. Planned
- * actions give honest feedback instead of opening fake forms.
+ * The hero sums the initial birds of non-completed batches persisted on
+ * this device. It is labelled as initial birds, not a live count — a
+ * "current" count needs daily reports to be meaningful. "Record daily
+ * report" opens the batch picker on the Reports tab; "New batch" opens
+ * the real create form.
  */
-import { useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import {
@@ -20,131 +22,77 @@ import {
   Screen,
   SectionHeader,
 } from '../components';
-import {
-  deriveSampleAlerts,
-  SAMPLE_BATCHES,
-  SAMPLE_TODAY_MOVEMENTS,
-} from '../data/sampleData';
-import type { SampleAlert } from '../data/sampleData';
-import { calculateClosingStock } from '../domain/birdStock';
+import { useBatches } from '../hooks/useBatches';
 import { useI18n } from '../i18n/I18nProvider';
-import type { TranslationKey } from '../i18n/strings';
 import { colors, spacing } from '../theme/tokens';
 import { formatCount } from '../utils/format';
 
-const ALERT_TEXT_KEYS: Readonly<Record<SampleAlert['kind'], TranslationKey>> = {
-  pendingReport: 'home.alertPendingReport',
-  closingReview: 'home.alertClosingReady',
-};
+interface HomeScreenProps {
+  readonly onCreateBatch: () => void;
+  /** Opens the Reports tab to pick a batch and record a daily report. */
+  readonly onRecordReport: () => void;
+}
 
-const ALERT_TONES: Readonly<Record<SampleAlert['kind'], 'warning' | 'info'>> = {
-  pendingReport: 'warning',
-  closingReview: 'info',
-};
-
-export function HomeScreen() {
+export function HomeScreen({ onCreateBatch, onRecordReport }: HomeScreenProps) {
   const { t } = useI18n();
-  const [showPlannedNotice, setShowPlannedNotice] = useState(false);
+  const { batches, loading, error, reload } = useBatches();
 
-  const movements = SAMPLE_TODAY_MOVEMENTS;
-  const stock = calculateClosingStock(movements);
-
-  const inflow = movements.additions + movements.transfersIn;
-  const losses = movements.deaths + movements.culls;
-  const outflow = movements.sales + movements.transfersOut;
-
-  const alerts = deriveSampleAlerts(SAMPLE_BATCHES);
-  const batchName = (batchId: string) =>
-    SAMPLE_BATCHES.find((batch) => batch.id === batchId)?.name ?? '';
-
-  const onPlannedAction = () => setShowPlannedNotice(true);
+  const totalInitialBirds = batches
+    .filter((batch) => batch.status !== 'completed')
+    .reduce((total, batch) => total + batch.initialBirdCount, 0);
 
   return (
     <Screen title={t('home.title')} subtitle={t('home.subtitle')}>
-      <InlineNotice tone="info">{t('common.sampleNotice')}</InlineNotice>
-
       <Card style={styles.hero}>
         <AppText variant="label" tone="muted">
-          {t('home.currentBirds')}
+          {t('home.totalInitialBirds')}
         </AppText>
-        {stock.ok ? (
-          <AppText variant="hero" numeric accessibilityRole="text">
-            {formatCount(stock.closing)}
+        {loading ? (
+          <AppText variant="metric" tone="muted">
+            {t('common.loading')}
           </AppText>
-        ) : (
+        ) : error ? (
           <AppText variant="metric" tone="danger">
             —
           </AppText>
+        ) : (
+          <AppText variant="hero" numeric accessibilityRole="text">
+            {formatCount(totalInitialBirds)}
+          </AppText>
         )}
         <AppText variant="caption" tone="muted">
-          {t('home.fromMovements')}
+          {t('home.fromBatches')}
         </AppText>
-
-        {stock.ok ? (
-          <>
-            <View style={styles.divider} />
-            <View style={styles.statRow}>
-              <Stat label={t('home.opening')} value={movements.opening} />
-              <Stat label={t('home.inflow')} value={inflow} />
-              <Stat label={t('home.losses')} value={losses} />
-              <Stat label={t('home.outflow')} value={outflow} />
-            </View>
-          </>
-        ) : null}
       </Card>
 
-      {!stock.ok ? <InlineNotice tone="danger">{t('common.stockInvalid')}</InlineNotice> : null}
+      {error ? (
+        <View style={styles.stateBlock}>
+          <InlineNotice tone="danger">{t('home.loadError')}</InlineNotice>
+          <Button label={t('common.retry')} variant="secondary" onPress={reload} />
+        </View>
+      ) : null}
 
       <SectionHeader title={t('home.needsAttention')} />
-      {alerts.length > 0 ? (
-        <View style={styles.alertList}>
-          {alerts.map((alert) => (
-            <InlineNotice key={alert.id} tone={ALERT_TONES[alert.kind]}>
-              {t(ALERT_TEXT_KEYS[alert.kind], { batch: batchName(alert.batchId) })}
-            </InlineNotice>
-          ))}
-        </View>
-      ) : (
-        <AppText variant="body" tone="muted">
-          {t('home.noAlerts')}
-        </AppText>
-      )}
+      <AppText variant="body" tone="muted">
+        {t('home.noAlerts')}
+      </AppText>
 
       <SectionHeader title={t('home.todayActions')} />
       <View style={styles.actions}>
         <Button
           label={t('home.recordReport')}
-          onPress={onPlannedAction}
+          onPress={onRecordReport}
           accessibilityLabel={t('home.recordReport')}
           style={styles.actionButton}
         />
         <Button
           label={t('home.newBatch')}
           variant="secondary"
-          onPress={onPlannedAction}
+          onPress={onCreateBatch}
           style={styles.actionButton}
         />
       </View>
-
-      {showPlannedNotice ? (
-        <InlineNotice tone="info" liveRegion>
-          {t('common.plannedNotice')}
-        </InlineNotice>
-      ) : null}
     </Screen>
-  );
-}
-
-function Stat({ label, value }: { label: string; value: number }) {
-  return (
-    <View style={styles.stat}>
-      <AppText variant="bodyStrong" numeric>
-        {formatCount(value)}
-      </AppText>
-      <AppText variant="caption" tone="muted" numberOfLines={2}>
-        {label}
-      </AppText>
-    </View>
   );
 }
 
@@ -154,24 +102,8 @@ const styles = StyleSheet.create({
     borderColor: colors.brandBorder,
     gap: spacing.xs,
   },
-  divider: {
-    backgroundColor: colors.brandBorder,
-    height: 1,
-    marginTop: spacing.md,
-  },
-  statRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing.sm,
-    marginTop: spacing.sm,
-  },
-  stat: {
-    flexGrow: 1,
-    flexBasis: '20%',
-    gap: 2,
-  },
-  alertList: {
-    gap: spacing.sm,
+  stateBlock: {
+    gap: spacing.md,
   },
   actions: {
     flexDirection: 'row',
